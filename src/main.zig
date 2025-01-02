@@ -1,72 +1,56 @@
 const std = @import("std");
-const GpuManager = @import("gpu.zig").GpuManager;
-const Ed25519 = @import("ed25519.zig").Ed25519;
-const Benchmark = @import("benchmark.zig").Benchmark;
-const Pattern = @import("pattern.zig").Pattern;
-const PatternOptions = @import("pattern.zig").PatternOptions;
+const Metal = @import("metal.zig").Metal;
 const SearchState = @import("search_state.zig").SearchState;
-
-const MAX_DEVICES = 8;
-const WORKGROUP_SIZE = 256;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Initialize GPU backend
-    var gpu = try GpuManager.init(allocator);
-    defer gpu.deinit();
+    // Get pattern from environment
+    const pattern = std.process.getEnvVarOwned(allocator, "VANITY_PATTERN") catch |err| {
+        if (err == error.EnvironmentVariableNotFound) {
+            std.debug.print("Error: VANITY_PATTERN environment variable not set\n", .{});
+            return;
+        }
+        return err;
+    };
+    defer allocator.free(pattern);
 
-    // For now, skip shader loading since we're using stub implementations
-    try gpu.createComputePipeline("");
-
-    // Get pattern and options
-    const raw_pattern = try std.process.getEnvVarOwned(allocator, "VANITY_PATTERN");
-    defer allocator.free(raw_pattern);
-
-    const ignore_case = blk: {
-        const case_env = std.process.getEnvVarOwned(allocator, "IGNORE_CASE") catch "";
-        defer allocator.free(case_env);
-        break :blk std.mem.eql(u8, case_env, "1") or
-            std.mem.eql(u8, case_env, "true") or
-            std.mem.eql(u8, case_env, "yes");
+    // Initialize search state
+    var state = SearchState{
+        .pattern = .{
+            .raw = pattern,
+            .case_sensitive = true,
+        },
+        .found = false,
+        .keypair = null,
+    };
+    defer if (state.keypair) |kp| {
+        allocator.free(kp.public);
+        allocator.free(kp.private);
     };
 
-    var pattern = try Pattern.init(allocator, raw_pattern, .{ .ignore_case = ignore_case });
-    defer pattern.deinit();
+    // Initialize GPU backend
+    var metal = try Metal.init(allocator);
+    defer metal.deinit();
 
-    std.debug.print("Using GPU backend: {s}\n", .{@tagName(gpu.backend)});
-    std.debug.print("Pattern: {s} ({} fixed characters)\n", .{ pattern.raw, pattern.fixed_chars.len });
-    std.debug.print("Case-sensitive: {}\n", .{!pattern.options.ignore_case});
-
-    // Run benchmark if --benchmark flag is present
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
-
-    if (args.len > 1 and std.mem.eql(u8, args[1], "--benchmark")) {
-        var benchmark = Benchmark.init(allocator, &gpu);
-        const result = try benchmark.run(pattern.raw);
-        Benchmark.printResults(result);
-        return;
-    }
-
-    // Normal vanity address search
+    // Print search parameters
+    std.debug.print("Using GPU backend: metal\n", .{});
+    std.debug.print("Pattern: {s} ({d} fixed characters)\n", .{ state.pattern.raw, state.pattern.raw.len });
+    std.debug.print("Case-sensitive: {}\n", .{state.pattern.case_sensitive});
     std.debug.print("Searching for Solana addresses matching pattern...\n", .{});
 
-    // Initialize compute resources
-    var search_state = try SearchState.init(allocator, &pattern);
-    defer search_state.deinit();
+    // Compile Metal shader
+    try metal.createComputePipeline();
+    try metal.dispatchCompute(&state, 256);
 
-    // Main search loop
-    while (!search_state.found) {
-        try gpu.dispatchCompute(&search_state, WORKGROUP_SIZE);
-        try search_state.checkResults();
+    // Print result if found
+    if (state.found) {
+        if (state.keypair) |kp| {
+            std.debug.print("\nFound matching keypair!\n", .{});
+            std.debug.print("Public:  {s}\n", .{kp.public});
+            std.debug.print("Private: {s}\n", .{kp.private});
+        }
     }
-
-    // Print results
-    const keypair = search_state.getFoundKeypair();
-    std.debug.print("\nFound matching keypair!\n", .{});
-    std.debug.print("Public: {s}\n", .{keypair.public});
-    std.debug.print("Private: {s}\n", .{keypair.private});
 }
