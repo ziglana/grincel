@@ -1,205 +1,268 @@
 const std = @import("std");
 
+pub const MTLSize = extern struct {
+    width: u32,
+    height: u32,
+    depth: u32,
+};
+
 pub const MetalFramework = struct {
-    pub fn new_default_library(self: *const MetalFramework, device: Device) ?Library {
-        _ = self;
-        const sel = sel_registerName("newDefaultLibrary");
-        return @ptrCast(objc_msgSend(device, sel));
-    }
-
-    pub const Device = *anyopaque;
-    pub const CommandQueue = *anyopaque;
-    pub const CommandBuffer = *anyopaque;
-    pub const ComputeCommandEncoder = *anyopaque;
-    pub const Library = *anyopaque;
-    pub const Function = *anyopaque;
-    pub const ComputePipelineState = *anyopaque;
-    pub const Buffer = *anyopaque;
-    pub const Error = **anyopaque;
-
-    pub const Size = extern struct {
-        width: usize,
-        height: usize,
-        depth: usize,
-    };
-
-    pub const ResourceOptions = packed struct(u32) {
-        storage_mode: u2 = 0,
-        cpu_cache_mode: u2 = 0,
-        _padding: u28 = 0,
-    };
-
-    // Function types
-    pub const CreateSystemDefaultDeviceFn = *const fn () callconv(.C) ?Device;
-    pub const NewCommandQueueFn = *const fn (Device) callconv(.C) ?CommandQueue;
-    pub const NewBufferWithLengthFn = *const fn (Device, usize, ResourceOptions) callconv(.C) ?Buffer;
-    pub const CommandBufferFn = *const fn (CommandQueue) callconv(.C) ?CommandBuffer;
-    pub const ComputeCommandEncoderFn = *const fn (CommandBuffer) callconv(.C) ?ComputeCommandEncoder;
-    pub const SetComputePipelineStateFn = *const fn (ComputeCommandEncoder, ComputePipelineState) callconv(.C) void;
-    pub const SetBufferFn = *const fn (ComputeCommandEncoder, Buffer, usize, u32) callconv(.C) void;
-    pub const DispatchThreadgroupsFn = *const fn (ComputeCommandEncoder, Size, Size) callconv(.C) void;
-    pub const EndEncodingFn = *const fn (ComputeCommandEncoder) callconv(.C) void;
-    pub const CommitFn = *const fn (CommandBuffer) callconv(.C) void;
-    pub const WaitUntilCompletedFn = *const fn (CommandBuffer) callconv(.C) void;
-    pub const GetContentsFn = *const fn (Buffer) callconv(.C) [*]u8;
-    pub const GetLengthFn = *const fn (Buffer) callconv(.C) usize;
-    pub const NewLibraryWithDataFn = *const fn (Device, [*]const u8, usize, ?**anyopaque) callconv(.C) ?Library;
-    pub const NewLibraryWithFileFn = *const fn (Device, [*:0]const u8, ?**anyopaque) callconv(.C) ?Library;
-    pub const NewFunctionWithNameFn = *const fn (Library, [*:0]const u8) callconv(.C) ?Function;
-    pub const NewComputePipelineStateFn = *const fn (Device, Function, ?**anyopaque) callconv(.C) ?ComputePipelineState;
-
-    // Function pointers
-    create_system_default_device: CreateSystemDefaultDeviceFn,
-    new_command_queue: NewCommandQueueFn,
-    new_buffer_with_length: NewBufferWithLengthFn,
-    command_buffer: CommandBufferFn,
-    compute_command_encoder: ComputeCommandEncoderFn,
-    set_compute_pipeline_state: SetComputePipelineStateFn,
-    set_buffer: SetBufferFn,
-    dispatch_threadgroups: DispatchThreadgroupsFn,
-    end_encoding: EndEncodingFn,
-    commit: CommitFn,
-    wait_until_completed: WaitUntilCompletedFn,
-    get_contents: GetContentsFn,
-    get_length: GetLengthFn,
-    new_library_with_data: NewLibraryWithDataFn,
-    new_library_with_file: NewLibraryWithFileFn,
-    new_function_with_name: NewFunctionWithNameFn,
-    new_compute_pipeline_state: NewComputePipelineStateFn,
-
-    // Objective-C runtime functions
-    pub extern "objc" fn objc_getClass(name: [*:0]const u8) ?*anyopaque;
-    pub extern "objc" fn sel_registerName(name: [*:0]const u8) *anyopaque;
-    pub extern "objc" fn objc_msgSend(obj: ?*anyopaque, sel: *anyopaque, ...) callconv(.C) ?*anyopaque;
+    device: ?*anyopaque,
+    command_queue: ?*anyopaque,
 
     pub fn init() !MetalFramework {
-        // Create function pointers
-        // Initialize Foundation framework
-        const NSAutoreleasePool = objc_getClass("NSAutoreleasePool") orelse return error.NoFoundation;
-        const pool = objc_msgSend(objc_msgSend(NSAutoreleasePool, sel_registerName("alloc")), sel_registerName("init")) orelse return error.NoFoundation;
-        defer _ = objc_msgSend(pool, sel_registerName("drain"));
+        std.debug.print("Creating Metal device...\n", .{});
+        const device = MTLCreateSystemDefaultDevice() orelse {
+            std.debug.print("Failed to create Metal device\n", .{});
+            return error.NoMetalDevice;
+        };
+        std.debug.print("Metal device created\n", .{});
 
-        // Initialize Metal framework
-        const MTLCreateSystemDefaultDevice = @extern(*const fn () callconv(.C) ?Device, .{ .name = "MTLCreateSystemDefaultDevice", .linkage = .strong });
-        
+        std.debug.print("Creating command queue...\n", .{});
+        const cmd_queue_sel = sel_registerName("newCommandQueue") orelse {
+            std.debug.print("Failed to get newCommandQueue selector\n", .{});
+            return error.NoCommandQueue;
+        };
+
+        const command_queue = objc_msgSend_basic(device, cmd_queue_sel) orelse {
+            std.debug.print("Failed to create command queue\n", .{});
+            return error.NoCommandQueue;
+        };
+        std.debug.print("Command queue created\n", .{});
+
+        // Retain both device and command queue since they're autoreleased
+        const retain_sel = sel_registerName("retain");
+        if (retain_sel != null) {
+            _ = objc_msgSend_basic(device, retain_sel);
+            _ = objc_msgSend_basic(command_queue, retain_sel);
+        }
+
         return MetalFramework{
-            .create_system_default_device = struct {
-                fn func() callconv(.C) ?Device {
-                    return MTLCreateSystemDefaultDevice();
-                }
-            }.func,
-            .new_command_queue = struct {
-                fn func(dev: Device) callconv(.C) ?CommandQueue {
-                    const sel = sel_registerName("newCommandQueue");
-                    return objc_msgSend(dev, sel);
-                }
-            }.func,
-            .new_buffer_with_length = struct {
-                fn func(dev: Device, length: usize, options: ResourceOptions) callconv(.C) ?Buffer {
-                    const sel = sel_registerName("newBufferWithLength:options:");
-                    return objc_msgSend(dev, sel, length, @as(c_uint, @bitCast(options)));
-                }
-            }.func,
-            .command_buffer = struct {
-                fn func(queue: CommandQueue) callconv(.C) ?CommandBuffer {
-                    const sel = sel_registerName("commandBuffer");
-                    return objc_msgSend(queue, sel);
-                }
-            }.func,
-            .compute_command_encoder = struct {
-                fn func(buffer: CommandBuffer) callconv(.C) ?ComputeCommandEncoder {
-                    const sel = sel_registerName("computeCommandEncoder");
-                    return objc_msgSend(buffer, sel);
-                }
-            }.func,
-            .set_compute_pipeline_state = struct {
-                fn func(encoder: ComputeCommandEncoder, state: ComputePipelineState) callconv(.C) void {
-                    const sel = sel_registerName("setPipelineState:");
-                    _ = objc_msgSend(encoder, sel, state);
-                }
-            }.func,
-            .set_buffer = struct {
-                fn func(encoder: ComputeCommandEncoder, buffer: Buffer, offset: usize, index: u32) callconv(.C) void {
-                    const sel = sel_registerName("setBuffer:offset:atIndex:");
-                    _ = objc_msgSend(encoder, sel, buffer, offset, index);
-                }
-            }.func,
-            .dispatch_threadgroups = struct {
-                fn func(encoder: ComputeCommandEncoder, grid: Size, group: Size) callconv(.C) void {
-                    const sel = sel_registerName("dispatchThreadgroups:threadsPerThreadgroup:");
-                    _ = objc_msgSend(encoder, sel, grid, group);
-                }
-            }.func,
-            .end_encoding = struct {
-                fn func(encoder: ComputeCommandEncoder) callconv(.C) void {
-                    const sel = sel_registerName("endEncoding");
-                    _ = objc_msgSend(encoder, sel);
-                }
-            }.func,
-            .commit = struct {
-                fn func(buffer: CommandBuffer) callconv(.C) void {
-                    const sel = sel_registerName("commit");
-                    _ = objc_msgSend(buffer, sel);
-                }
-            }.func,
-            .wait_until_completed = struct {
-                fn func(buffer: CommandBuffer) callconv(.C) void {
-                    const sel = sel_registerName("waitUntilCompleted");
-                    _ = objc_msgSend(buffer, sel);
-                }
-            }.func,
-            .get_contents = struct {
-                fn func(buffer: Buffer) callconv(.C) [*]u8 {
-                    const sel = sel_registerName("contents");
-                    return @ptrCast(objc_msgSend(buffer, sel) orelse unreachable);
-                }
-            }.func,
-            .get_length = struct {
-                fn func(buffer: Buffer) callconv(.C) usize {
-                    const sel = sel_registerName("length");
-                    const ptr = objc_msgSend(buffer, sel) orelse unreachable;
-                    return @intFromPtr(ptr);
-                }
-            }.func,
-            .new_library_with_data = struct {
-                fn func(dev: Device, data: [*]const u8, len: usize, err: ?**anyopaque) callconv(.C) ?Library {
-                    const lib_sel = sel_registerName("newLibraryWithSource:options:error:");
-                    const NSString = objc_getClass("NSString") orelse return null;
-                    const str_sel = sel_registerName("stringWithUTF8String:");
-                    const source = objc_msgSend(NSString, str_sel, @as([*:0]const u8, @ptrCast(data[0..len]))) orelse return null;
-                    const MTLCompileOptions = objc_getClass("MTLCompileOptions") orelse return null;
-                    const alloc_sel = sel_registerName("alloc");
-                    const init_sel = sel_registerName("init");
-                    const options = objc_msgSend(objc_msgSend(MTLCompileOptions, alloc_sel), init_sel) orelse return null;
-                    const lang_sel = sel_registerName("setLanguageVersion:");
-                    _ = objc_msgSend(options, lang_sel, @as(c_uint, 3)); // Metal 3.0
-                    return objc_msgSend(dev, lib_sel, source, options, err);
-                }
-            }.func,
-            .new_function_with_name = struct {
-                fn func(lib: Library, name: [*:0]const u8) callconv(.C) ?Function {
-                    const func_sel = sel_registerName("newFunctionWithName:");
-                    const NSString = objc_getClass("NSString") orelse return null;
-                    const str_sel = sel_registerName("stringWithUTF8String:");
-                    const func_name = objc_msgSend(NSString, str_sel, name) orelse return null;
-                    return objc_msgSend(lib, func_sel, func_name);
-                }
-            }.func,
-            .new_library_with_file = struct {
-                fn func(dev: Device, path: [*:0]const u8, err: ?**anyopaque) callconv(.C) ?Library {
-                    const sel = sel_registerName("newLibraryWithFile:error:");
-                    const NSString = objc_getClass("NSString") orelse return null;
-                    const str_sel = sel_registerName("stringWithUTF8String:");
-                    const file_path = objc_msgSend(NSString, str_sel, path) orelse return null;
-                    return objc_msgSend(dev, sel, file_path, err);
-                }
-            }.func,
-            .new_compute_pipeline_state = struct {
-                fn func(dev: Device, function: Function, err: ?**anyopaque) callconv(.C) ?ComputePipelineState {
-                    const sel = sel_registerName("newComputePipelineStateWithFunction:error:");
-                    return objc_msgSend(dev, sel, function, err);
-                }
-            }.func,
+            .device = device,
+            .command_queue = command_queue,
         };
     }
+
+    pub fn deinit(self: *MetalFramework) void {
+        const release_sel = sel_registerName("release");
+        if (release_sel) |sel| {
+            if (self.command_queue) |queue| {
+                _ = objc_msgSend_basic(queue, sel);
+                self.command_queue = null;
+            }
+            if (self.device) |device| {
+                _ = objc_msgSend_basic(device, sel);
+                self.device = null;
+            }
+        }
+    }
+
+    pub fn is_metal_supported() bool {
+        return MTLCreateSystemDefaultDevice() != null;
+    }
+
+    pub fn get_device_name(device: ?*anyopaque) ?[*:0]const u8 {
+        if (device == null) return null;
+        const sel = sel_registerName("name") orelse return null;
+        const ns_string = objc_msgSend_basic(device, sel) orelse return null;
+        const utf8_sel = sel_registerName("UTF8String") orelse return null;
+        const result = objc_msgSend_basic(ns_string, utf8_sel);
+        return if (result) |ptr| @ptrCast(ptr) else null;
+    }
+
+    pub fn get_max_threadgroup_memory_length(device: ?*anyopaque) u64 {
+        if (device == null) return 0;
+        const sel = sel_registerName("maxThreadgroupMemoryLength") orelse return 0;
+        const result = objc_msgSend_basic(device, sel) orelse return 0;
+        return @intFromPtr(result);
+    }
+
+    pub fn get_max_threads_per_threadgroup(device: ?*anyopaque) MTLSize {
+        if (device == null) return MTLSize{ .width = 0, .height = 0, .depth = 0 };
+        const sel = sel_registerName("maxThreadsPerThreadgroup") orelse return MTLSize{ .width = 0, .height = 0, .depth = 0 };
+        const result = objc_msgSend_basic(device, sel) orelse return MTLSize{ .width = 0, .height = 0, .depth = 0 };
+        const size = @as(*const MTLSize, @ptrFromInt(@intFromPtr(result)));
+        return size.*;
+    }
+
+    pub fn dispatch_compute(encoder: ?*anyopaque, grid_size: MTLSize, threads_per_group_size: MTLSize) void {
+        const sel = sel_registerName("dispatchThreadgroups:threadsPerThreadgroup:") orelse return;
+        const grid = [_]u32{ grid_size.width, grid_size.height, grid_size.depth };
+        const threads = [_]u32{ threads_per_group_size.width, threads_per_group_size.height, threads_per_group_size.depth };
+        _ = objc_msgSend_dispatch(encoder, sel, &grid, &threads);
+    }
 };
+
+// Metal resource options
+pub const MTLResourceStorageModeShared: u64 = 0;
+pub const MTLResourceCPUCacheModeWriteCombined: u64 = 1;
+pub const MTLResourceStorageModeOptions: u64 = MTLResourceStorageModeShared | (MTLResourceCPUCacheModeWriteCombined << 4);
+
+pub const MTLCommandBufferStatus = enum(u32) {
+    NotEnqueued = 0,
+    Enqueued = 1,
+    Committed = 2,
+    Scheduled = 3,
+    Completed = 4,
+    Error = 5,
+};
+
+// External function declarations
+pub extern fn MTLCreateSystemDefaultDevice() ?*anyopaque;
+pub extern fn sel_registerName(name: [*:0]const u8) ?*anyopaque;
+pub extern fn objc_getClass(name: [*:0]const u8) ?*anyopaque;
+pub extern fn objc_msgSend(obj: ?*anyopaque, sel: ?*anyopaque, ...) ?*anyopaque;
+pub extern fn NSString_stringWithUTF8String(str: [*:0]const u8) ?*anyopaque;
+pub extern fn NSBundle_mainBundle() ?*anyopaque;
+
+// Metal function info getters
+pub fn MTLFunction_getName(function: ?*anyopaque) ?[*:0]const u8 {
+    if (function == null) return null;
+    const sel = sel_registerName("name") orelse return null;
+    const ns_string = objc_msgSend_basic(function, sel) orelse return null;
+    const utf8_sel = sel_registerName("UTF8String") orelse return null;
+    const result = objc_msgSend_basic(ns_string, utf8_sel);
+    return if (result) |ptr| @ptrCast(ptr) else null;
+}
+
+pub fn MTLFunction_getDevice(obj: ?*anyopaque) ?*anyopaque {
+    if (obj == null) return null;
+    const sel = sel_registerName("device") orelse return null;
+    return objc_msgSend_basic(obj, sel);
+}
+
+// Wrapper functions
+pub fn sel_registerName_wrapper(name: [*:0]const u8) ?*anyopaque {
+    const sel = sel_registerName(name) orelse return null;
+    std.debug.print("Registered selector '{s}'\n", .{name});
+    return sel;
+}
+
+pub fn objc_msgSend_basic(obj: ?*anyopaque, sel: ?*anyopaque) ?*anyopaque {
+    if (obj == null or sel == null) return null;
+    return objc_msgSend(obj, sel);
+}
+
+pub fn objc_msgSend_str(obj: ?*anyopaque, sel: ?*anyopaque, str: [*:0]const u8) ?*anyopaque {
+    if (obj == null or sel == null) return null;
+    return objc_msgSend(obj, sel, str);
+}
+
+pub fn objc_msgSend_nsstr(obj: ?*anyopaque, sel: ?*anyopaque, str: ?*anyopaque) ?*anyopaque {
+    if (obj == null or sel == null or str == null) return null;
+    return objc_msgSend(obj, sel, str);
+}
+
+pub fn objc_msgSend_buffer(obj: ?*anyopaque, sel: ?*anyopaque, len: usize, opt: u32) ?*anyopaque {
+    if (obj == null or sel == null) return null;
+    std.debug.print("Creating buffer with length={}, options={}\n", .{ len, opt });
+    const buffer = objc_msgSend(obj, sel, len, opt);
+    if (buffer != null) {
+        // Retain buffer since it's autoreleased
+        const retain_sel = sel_registerName("retain");
+        if (retain_sel != null) {
+            _ = objc_msgSend_basic(buffer, retain_sel);
+            std.debug.print("Buffer retained successfully\n", .{});
+        }
+        std.debug.print("Buffer created successfully\n", .{});
+    } else {
+        std.debug.print("Failed to create buffer\n", .{});
+    }
+    return buffer;
+}
+
+pub fn objc_msgSend_set_buffer(obj: ?*anyopaque, sel: ?*anyopaque, buffer: ?*anyopaque, offset: usize, index: u32) ?*anyopaque {
+    if (obj == null or sel == null or buffer == null) {
+        std.debug.print("Invalid parameters in set_buffer: obj={*}, sel={*}, buffer={*}\n", .{ obj, sel, buffer });
+        return null;
+    }
+    std.debug.print("Setting buffer at index {}: buffer={*}, offset={}\n", .{ index, buffer, offset });
+    return objc_msgSend(obj, sel, buffer, offset, index);
+}
+
+pub fn objc_msgSend_pipeline(obj: ?*anyopaque, sel: ?*anyopaque, function: ?*anyopaque, err: *?*anyopaque) ?*anyopaque {
+    if (obj == null or sel == null or function == null) {
+        std.debug.print("Invalid parameters in pipeline creation: obj={*}, sel={*}, function={*}\n", .{ obj, sel, function });
+        return null;
+    }
+
+    std.debug.print("Creating pipeline state with function: {*}\n", .{function});
+    var error_ptr: ?*anyopaque = null;
+    const pipeline = objc_msgSend(obj, sel, function, &error_ptr);
+    if (pipeline == null and error_ptr != null) {
+        err.* = error_ptr;
+        std.debug.print("Failed to create pipeline state\n", .{});
+    } else if (pipeline != null) {
+        // Retain pipeline since it's autoreleased
+        const retain_sel = sel_registerName("retain");
+        if (retain_sel != null) {
+            _ = objc_msgSend_basic(pipeline, retain_sel);
+            std.debug.print("Pipeline state retained successfully\n", .{});
+        }
+        std.debug.print("Pipeline state created successfully\n", .{});
+    }
+    return pipeline;
+}
+
+pub fn objc_msgSend_dispatch(obj: ?*anyopaque, sel: ?*anyopaque, grid: *const [3]u32, group: *const [3]u32) ?*anyopaque {
+    if (obj == null or sel == null) return null;
+    std.debug.print("Dispatching compute with grid size: ({}, {}, {}), group size: ({}, {}, {})\n", .{
+        grid[0],  grid[1],  grid[2],
+        group[0], group[1], group[2],
+    });
+    return objc_msgSend(obj, sel, grid, group);
+}
+
+pub fn objc_msgSend_get_status(obj: ?*anyopaque) MTLCommandBufferStatus {
+    if (obj == null) return .NotEnqueued;
+    const sel = sel_registerName("status") orelse return .NotEnqueued;
+    const result = objc_msgSend_basic(obj, sel) orelse return .NotEnqueued;
+    const status_int = @intFromPtr(result);
+    return @enumFromInt(status_int);
+}
+
+pub fn objc_msgSend_url(obj: ?*anyopaque, sel: ?*anyopaque, str: ?*anyopaque, is_dir: bool) ?*anyopaque {
+    if (obj == null or sel == null or str == null) return null;
+    return objc_msgSend(obj, sel, str, is_dir);
+}
+
+pub fn objc_msgSend_library_url(obj: ?*anyopaque, sel: ?*anyopaque, url: ?*anyopaque, err: *?*anyopaque) ?*anyopaque {
+    if (obj == null or sel == null or url == null) return null;
+    var error_ptr: ?*anyopaque = null;
+    const result = objc_msgSend(obj, sel, url, &error_ptr);
+    if (result == null and error_ptr != null) {
+        err.* = error_ptr;
+    } else if (result != null) {
+        // Retain library since it's autoreleased
+        const retain_sel = sel_registerName("retain");
+        if (retain_sel != null) {
+            _ = objc_msgSend_basic(result, retain_sel);
+            std.debug.print("Library retained successfully\n", .{});
+        }
+    }
+    return result;
+}
+
+pub fn objc_msgSend_get_description(obj: ?*anyopaque) ?[*:0]const u8 {
+    if (obj == null) return null;
+    const sel = sel_registerName("localizedDescription") orelse return null;
+    const ns_string = objc_msgSend_basic(obj, sel) orelse return null;
+    const utf8_sel = sel_registerName("UTF8String") orelse return null;
+    const result = objc_msgSend_basic(ns_string, utf8_sel);
+    return if (result) |ptr| @ptrCast(ptr) else null;
+}
+
+pub fn objc_msgSend_error(obj: ?*anyopaque, sel: ?*anyopaque) ?*anyopaque {
+    if (obj == null or sel == null) return null;
+    return objc_msgSend_basic(obj, sel);
+}
+
+pub fn objc_msgSend_set_state(obj: ?*anyopaque, sel: ?*anyopaque, state: ?*anyopaque) ?*anyopaque {
+    if (obj == null or sel == null or state == null) return null;
+    return objc_msgSend(obj, sel, state);
+}
+
+pub fn objc_msgSend_function(obj: ?*anyopaque, sel: ?*anyopaque, function: ?*anyopaque) ?*anyopaque {
+    if (obj == null or sel == null or function == null) return null;
+    return objc_msgSend(obj, sel, function);
+}

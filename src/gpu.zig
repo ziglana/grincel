@@ -1,6 +1,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const SearchState = @import("search_state.zig").SearchState;
+const SearchState = @import("search_state").SearchState;
+const Metal = @import("metal").Metal;
+const Vulkan = @import("vulkan").Vulkan;
 
 pub const GpuBackend = enum {
     vulkan,
@@ -10,20 +12,20 @@ pub const GpuBackend = enum {
 pub const GpuManager = struct {
     backend: GpuBackend,
     impl: union {
-        vulkan: @import("vulkan.zig").Vulkan,
-        metal: @import("metal.zig").Metal,
+        vulkan: Vulkan,
+        metal: Metal,
     },
 
     pub fn init(allocator: std.mem.Allocator) !GpuManager {
         if (builtin.os.tag == .macos) {
             return GpuManager{
                 .backend = .metal,
-                .impl = .{ .metal = try @import("metal.zig").Metal.init(allocator) },
+                .impl = .{ .metal = try Metal.init(allocator) },
             };
         } else {
             return GpuManager{
                 .backend = .vulkan,
-                .impl = .{ .vulkan = try @import("vulkan.zig").Vulkan.init(allocator) },
+                .impl = .{ .vulkan = try Vulkan.init(allocator) },
             };
         }
     }
@@ -35,10 +37,10 @@ pub const GpuManager = struct {
         }
     }
 
-    pub fn createComputePipeline(self: *GpuManager, shader_code: []const u8) !void {
+    pub fn createComputePipeline(self: *GpuManager) !void {
         switch (self.backend) {
-            .vulkan => return self.impl.vulkan.createComputePipeline(shader_code),
-            .metal => return self.impl.metal.createComputePipeline(shader_code),
+            .vulkan => return self.impl.vulkan.createComputePipeline(),
+            .metal => return self.impl.metal.createComputePipeline(),
         }
     }
 

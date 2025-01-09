@@ -2,24 +2,24 @@
 using namespace metal;
 
 struct Pattern {
-    uint32_t pattern_length;
+    uint32_t pattern_length __attribute__((aligned(16)));
     uint8_t _padding1[12];  // Pad to 16 bytes
-    uint32_t fixed_chars[8];
+    uint32_t fixed_chars[8] __attribute__((aligned(16)));
     uint8_t _padding2[16];  // Pad to next 16-byte boundary
-    uint32_t mask[8];
+    uint32_t mask[8] __attribute__((aligned(16)));
     uint8_t _padding3[16];  // Pad to next 16-byte boundary
-    uint32_t case_sensitive;
+    uint32_t case_sensitive __attribute__((aligned(16)));
     uint8_t _padding4[12];  // Pad to final 16-byte boundary
 } __attribute__((aligned(16)));
 
 struct KeyPair {
-    uint32_t private_key[8] __attribute__((aligned(16)));
-    uint32_t _padding1[4];
-    uint32_t public_key[8] __attribute__((aligned(16)));
-    uint32_t _padding2[4];
-    uint32_t debug[36] __attribute__((aligned(16)));
-    uint32_t _padding3[12];
-} __attribute__((aligned(16)));
+    uint8_t private_key[32] __attribute__((aligned(4)));
+    uint8_t _padding1[16] __attribute__((aligned(4)));
+    uint8_t public_key[32] __attribute__((aligned(4)));
+    uint8_t _padding2[16] __attribute__((aligned(4)));
+    uint32_t debug[36] __attribute__((aligned(4)));
+    uint8_t _padding3[48] __attribute__((aligned(4)));
+} __attribute__((aligned(4)));
 
 kernel void compute(device const Pattern* pattern [[buffer(0)]],
                    device KeyPair* key_pairs [[buffer(1)]],

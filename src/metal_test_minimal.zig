@@ -17,7 +17,7 @@ pub fn main() !void {
     }
     std.debug.print("\n\n", .{});
 
-    const KeyPair = extern struct {
+    const KeyPair = struct {
         private_key: [32]u8 align(4),
         _padding1: [16]u8 align(4),
         public_key: [32]u8 align(4),
@@ -52,10 +52,6 @@ pub fn main() !void {
         .fixed_chars = [_]u32{0} ** 8,
         .mask = [_]u32{0} ** 8,
         .case_sensitive = 1,
-        ._padding1 = [_]u8{0} ** 12,
-        ._padding2 = [_]u8{0} ** 16,
-        ._padding3 = [_]u8{0} ** 16,
-        ._padding4 = [_]u8{0} ** 12,
     };
 
     // Create test key pair buffer
@@ -68,34 +64,12 @@ pub fn main() !void {
         ._padding3 = [_]u8{0} ** 48,
     };
 
-    // Get max threads per threadgroup
-    const max_threads = metal_framework.MetalFramework.get_max_threads_per_threadgroup(state.device);
-    std.debug.print("Max threads per threadgroup: ({}, {}, {})\n", .{
-        max_threads.width,
-        max_threads.height,
-        max_threads.depth,
-    });
-
     // Set up compute resources
     try metal.setupCompute(&state, std.mem.asBytes(&pattern), std.mem.asBytes(&key_pair));
 
-    // Run compute with appropriate thread group size
+    // Run compute
     const grid_size = metal_framework.MTLSize{ .width = 1, .height = 1, .depth = 1 };
-    const group_size = metal_framework.MTLSize{
-        .width = @min(max_threads.width, 256),
-        .height = 1,
-        .depth = 1,
-    };
-
-    std.debug.print("Running compute with grid size: ({}, {}, {}), group size: ({}, {}, {})\n", .{
-        grid_size.width,
-        grid_size.height,
-        grid_size.depth,
-        group_size.width,
-        group_size.height,
-        group_size.depth,
-    });
-
+    const group_size = metal_framework.MTLSize{ .width = 1, .height = 1, .depth = 1 };
     try metal.runCompute(&state, grid_size, group_size);
 
     // Get results

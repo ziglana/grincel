@@ -26,7 +26,7 @@ pub const Benchmark = struct {
     }
 
     pub fn run(self: *Benchmark, pattern_str: []const u8) !BenchmarkResult {
-        var pattern = try Pattern.init(self.allocator, pattern_str, .{ .ignore_case = false });
+        var pattern = try Pattern.init(self.allocator, pattern_str, false);
         defer pattern.deinit();
 
         // Create a search state for benchmarking
