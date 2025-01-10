@@ -1,5 +1,7 @@
 const std = @import("std");
 const GpuManager = @import("gpu.zig").GpuManager;
+const SearchState = @import("search_state.zig").SearchState;
+const Pattern = @import("pattern.zig").Pattern;
 
 pub const BenchmarkResult = struct {
     attempts_per_second: f64,
@@ -23,12 +25,19 @@ pub const Benchmark = struct {
         };
     }
 
-    pub fn run(self: *Benchmark, pattern: []const u8) !BenchmarkResult {
+    pub fn run(self: *Benchmark, pattern_str: []const u8) !BenchmarkResult {
+        var pattern = try Pattern.init(self.allocator, pattern_str, false);
+        defer pattern.deinit();
+
+        // Create a search state for benchmarking
+        var search_state = try SearchState.init(self.allocator, &pattern);
+        defer search_state.deinit();
+
         // Warm-up phase
         std.debug.print("Warming up for {} ms...\n", .{WARMUP_DURATION_MS});
         const warmup_start = std.time.milliTimestamp();
         while (std.time.milliTimestamp() - warmup_start < WARMUP_DURATION_MS) {
-            try self.gpu.dispatchCompute(null, WORKGROUP_SIZE);
+            try self.gpu.dispatchCompute(&search_state, WORKGROUP_SIZE);
         }
 
         // Actual benchmark
@@ -38,7 +47,7 @@ pub const Benchmark = struct {
         const end_time = start_time + BENCHMARK_DURATION_MS;
 
         while (std.time.milliTimestamp() < end_time) {
-            try self.gpu.dispatchCompute(null, WORKGROUP_SIZE);
+            try self.gpu.dispatchCompute(&search_state, WORKGROUP_SIZE);
             total_attempts += WORKGROUP_SIZE;
         }
 
@@ -48,8 +57,8 @@ pub const Benchmark = struct {
         return BenchmarkResult{
             .attempts_per_second = attempts_per_second,
             .total_attempts = total_attempts,
-            .duration_ms = @intCast(actual_duration),
-            .pattern = pattern,
+            .duration_ms = @intCast(@max(0, actual_duration)),
+            .pattern = pattern_str,
         };
     }
 

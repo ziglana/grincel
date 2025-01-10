@@ -1,5 +1,5 @@
 const std = @import("std");
-const SearchState = @import("search_state.zig").SearchState;
+const SearchState = @import("search_state").SearchState;
 
 pub const Vulkan = struct {
     allocator: std.mem.Allocator,
@@ -14,7 +14,7 @@ pub const Vulkan = struct {
         _ = self;
     }
 
-    pub fn createComputePipeline(self: *Vulkan, _: []const u8) !void {
+    pub fn createComputePipeline(self: *Vulkan) !void {
         _ = self;
     }
 

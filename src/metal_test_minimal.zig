@@ -18,12 +18,12 @@ pub fn main() !void {
     std.debug.print("\n\n", .{});
 
     const KeyPair = extern struct {
-        private_key: [32]u8 align(4),
-        _padding1: [16]u8 align(4),
-        public_key: [32]u8 align(4),
-        _padding2: [16]u8 align(4),
-        debug: [36]u32 align(4),
-        _padding3: [48]u8 align(4),
+        private_key: [8]u32, // 32 bytes as u32 array
+        _padding1: [4]u32, // 16 bytes as u32 array
+        public_key: [8]u32, // 32 bytes as u32 array
+        _padding2: [4]u32, // 16 bytes as u32 array
+        debug: [36]u32, // Already u32 array
+        _padding3: [12]u32, // 48 bytes as u32 array
     };
 
     std.debug.print("KeyPair struct layout:\n", .{});
@@ -46,27 +46,29 @@ pub fn main() !void {
     std.debug.print("Creating compute pipeline...\n", .{});
     try metal.createPipeline(&state, "compute");
 
-    // Create test pattern
-    var pattern = Pattern{
-        .pattern_length = 4,
-        .fixed_chars = [_]u32{0} ** 8,
-        .mask = [_]u32{0} ** 8,
-        .case_sensitive = 1,
-        ._padding1 = [_]u32{0} ** 3,
-        ._padding2 = [_]u32{0} ** 4,
-        ._padding3 = [_]u32{0} ** 4,
-        ._padding4 = [_]u32{0} ** 3,
-    };
+    // Create larger input and output buffers aligned to 16 bytes
+    var input: [1024]u32 align(16) = .{
+        0x12345678, 0, 0, 0,
+        0,          0, 0, 0,
+        0,          0, 0, 0,
+        0,          0, 0, 0,
+    } ** 64;
+    var output: [2048]u32 align(16) = .{
+        0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0,
+    } ** 64;
 
-    // Create test key pair buffer
-    var key_pair = KeyPair{
-        .private_key = [_]u8{0} ** 32,
-        ._padding1 = [_]u8{0} ** 16,
-        .public_key = [_]u8{0} ** 32,
-        ._padding2 = [_]u8{0} ** 16,
-        .debug = [_]u32{0} ** 36,
-        ._padding3 = [_]u8{0} ** 48,
-    };
+    std.debug.print("\nInput buffer contents:\n", .{});
+    for (input, 0..) |value, i| {
+        std.debug.print("input[{}] = 0x{X:0>8}\n", .{ i, value });
+    }
+
+    // Set up compute resources with debug prints
+    std.debug.print("\nSetting up compute resources...\n", .{});
+    try metal.setupCompute(&state, std.mem.asBytes(&input), std.mem.asBytes(&output));
+    std.debug.print("Compute resources set up successfully\n", .{});
 
     // Get max threads per threadgroup
     const max_threads = metal_framework.MetalFramework.get_max_threads_per_threadgroup(state.device);
@@ -76,34 +78,23 @@ pub fn main() !void {
         max_threads.depth,
     });
 
-    // Set up compute resources
-    try metal.setupCompute(&state, std.mem.asBytes(&pattern), std.mem.asBytes(&key_pair));
-
     // Run compute with appropriate thread group size
-    const grid_size = metal_framework.MTLSize{ .width = 1, .height = 1, .depth = 1 };
+    std.debug.print("\nRunning compute...\n", .{});
+    const grid_size = metal_framework.MTLSize{ .width = 64, .height = 1, .depth = 1 };
     const group_size = metal_framework.MTLSize{
-        .width = @min(max_threads.width, 256),
+        .width = 64, // Process 64 items in parallel
         .height = 1,
         .depth = 1,
     };
-
-    std.debug.print("Running compute with grid size: ({}, {}, {}), group size: ({}, {}, {})\n", .{
-        grid_size.width,
-        grid_size.height,
-        grid_size.depth,
-        group_size.width,
-        group_size.height,
-        group_size.depth,
-    });
-
     try metal.runCompute(&state, grid_size, group_size);
+    std.debug.print("Compute completed successfully\n", .{});
 
     // Get results
-    try metal.getResults(&state, std.mem.asBytes(&key_pair));
+    try metal.getResults(&state, std.mem.asBytes(&output));
 
-    // Print debug values
-    std.debug.print("\nDebug values:\n", .{});
-    for (key_pair.debug, 0..) |value, i| {
-        std.debug.print("debug[{}] = 0x{X:0>8}\n", .{ i, value });
+    // Print output values
+    std.debug.print("\nOutput values:\n", .{});
+    for (output, 0..) |value, i| {
+        std.debug.print("output[{}] = 0x{X:0>8}\n", .{ i, value });
     }
 }

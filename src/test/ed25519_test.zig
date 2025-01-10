@@ -1,6 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
-const Ed25519 = @import("../ed25519.zig").Ed25519;
+const Ed25519 = @import("ed25519").Ed25519;
 
 test "keypair generation - deterministic" {
     const seed = "test_seed_12345";
@@ -19,4 +19,4 @@ test "keypair generation - different seeds" {
 
     try testing.expect(!std.mem.eql(u8, &keypair1.public, &keypair2.public));
     try testing.expect(!std.mem.eql(u8, &keypair1.private, &keypair2.private));
-};
+}

@@ -1,78 +1,65 @@
 #include <metal_stdlib>
 using namespace metal;
 
-// Ed25519 constants
-constant uint8_t ED25519_D[] = {
-    0xa3, 0x78, 0x59, 0x13, 0xca, 0x4d, 0xeb, 0x75, 
-    0xab, 0xd8, 0x41, 0x41, 0x4d, 0x0a, 0x70, 0x00,
-    0x98, 0xe8, 0x79, 0x77, 0x79, 0x40, 0xc7, 0x8c, 
-    0x73, 0xfe, 0x6f, 0x2b, 0xee, 0x6c, 0x03, 0x52
-};
+struct Pattern {
+    uint32_t pattern_length;
+    uint8_t _padding1[12];  // Pad to 16 bytes
+    uint32_t fixed_chars[8];
+    uint8_t _padding2[16];  // Pad to next 16-byte boundary
+    uint32_t mask[8];
+    uint8_t _padding3[16];  // Pad to next 16-byte boundary
+    uint32_t case_sensitive;
+    uint8_t _padding4[12];  // Pad to final 16-byte boundary
+} __attribute__((aligned(16)));
 
-constant uint8_t ED25519_Q[] = {
-    0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xed
-};
+struct KeyPair {
+    uint32_t private_key[8] __attribute__((aligned(16)));
+    uint32_t _padding1[4];
+    uint32_t public_key[8] __attribute__((aligned(16)));
+    uint32_t _padding2[4];
+    uint32_t debug[36] __attribute__((aligned(16)));
+    uint32_t _padding3[12];
+} __attribute__((aligned(16)));
 
-// Ed25519 helper functions
-void ed25519_scalar_mult(uint8_t *point, const uint8_t *scalar) {
-    // Simplified scalar multiplication for demo
-    // In practice, this would be a full Ed25519 scalar multiplication
-    for (int i = 0; i < 32; i++) {
-        point[i] ^= scalar[i];
-    }
-}
-
-void ed25519_generate_keypair(const uint8_t *seed, uint8_t *private_key, uint8_t *public_key) {
-    // Copy seed to private key
-    for (int i = 0; i < 32; i++) {
-        private_key[i] = seed[i];
+kernel void compute(device const Pattern* pattern [[buffer(0)]],
+                   device KeyPair* key_pairs [[buffer(1)]],
+                   uint thread_position_in_grid [[thread_position_in_grid]]) {
+    
+    device KeyPair& key_pair = key_pairs[thread_position_in_grid];
+    
+    // Write test values directly to debug array
+    key_pair.debug[0] = 0xDEADBEEF;
+    key_pair.debug[1] = 0xCAFEBABE;
+    key_pair.debug[2] = 0x12345678;
+    
+    // Write pattern data
+    key_pair.debug[3] = pattern->pattern_length;
+    key_pair.debug[4] = pattern->case_sensitive;
+    
+    // Copy pattern data
+    for (uint i = 0; i < 8; i++) {
+        key_pair.debug[5 + i] = pattern->fixed_chars[i];
+        key_pair.debug[13 + i] = pattern->mask[i];
     }
     
-    // Generate public key (simplified for demo)
-    // In practice, this would perform proper Ed25519 point multiplication
-    ed25519_scalar_mult(public_key, private_key);
-}
-
-struct PushConstants {
-    uint pattern_length;
-    uint fixed_chars[8];
-    uint mask[8];
-};
-
-kernel void vanityCompute(
-    device uint *keys [[buffer(0)]],
-    constant PushConstants &constants [[buffer(1)]],
-    uint gid [[thread_position_in_grid]]
-) {
-    // Generate random seed based on global ID
-    uint8_t seed[32];
-    for (uint i = 0; i < 32; i++) {
-        seed[i] = uint8_t(gid ^ (i * 0x1234567));
-    }
+    // Write struct sizes and offsets for debugging
+    key_pair.debug[21] = sizeof(Pattern);
+    key_pair.debug[22] = 0;   // pattern_length offset (0 bytes)
+    key_pair.debug[23] = 16;  // fixed_chars offset (16 bytes)
+    key_pair.debug[24] = 64;  // mask offset (64 bytes)
+    key_pair.debug[25] = 112; // case_sensitive offset (112 bytes)
     
-    // Generate Ed25519 keypair
-    uint8_t private_key[32];
-    uint8_t public_key[32];
-    ed25519_generate_keypair(seed, private_key, public_key);
+    // Write buffer addresses for debugging
+    key_pair.debug[26] = uint32_t(uintptr_t(pattern) & 0xFFFFFFFF);
+    key_pair.debug[27] = uint32_t(uintptr_t(pattern) >> 32);
+    key_pair.debug[28] = uint32_t(uintptr_t(&key_pairs[thread_position_in_grid]) & 0xFFFFFFFF);
+    key_pair.debug[29] = uint32_t(uintptr_t(&key_pairs[thread_position_in_grid]) >> 32);
+    key_pair.debug[30] = uint32_t(uintptr_t(&pattern->pattern_length) & 0xFFFFFFFF);
+    key_pair.debug[31] = uint32_t(uintptr_t(&pattern->pattern_length) >> 32);
+    key_pair.debug[32] = uint32_t(uintptr_t(&key_pair.debug[0]) & 0xFFFFFFFF);
+    key_pair.debug[33] = uint32_t(uintptr_t(&key_pair.debug[0]) >> 32);
     
-    // Check if public key matches pattern and mask
-    bool matches = true;
-    for (uint i = 0; i < constants.pattern_length && i < 8; i++) {
-        if (constants.mask[i] == 1 && public_key[i] != uint8_t(constants.fixed_chars[i])) {
-            matches = false;
-            break;
-        }
-    }
-    
-    // Store result if pattern matches
-    if (matches) {
-        uint offset = gid * 64;
-        for (uint i = 0; i < 32; i++) {
-            keys[offset + i] = private_key[i];
-            keys[offset + 32 + i] = public_key[i];
-        }
-    }
+    // Write thread info
+    key_pair.debug[34] = thread_position_in_grid;
+    key_pair.debug[35] = 0xFFFFFFFF; // End marker
 }
