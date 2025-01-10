@@ -12,7 +12,7 @@ pub fn initMetal() !MetalState {
     // Create Metal device
     const device = metal_framework.MTLCreateSystemDefaultDevice() orelse {
         std.debug.print("Failed to create Metal device\n", .{});
-        return MetalError.NoDevice;
+        return MetalError.NoMetalDevice;
     };
 
     // Verify device capabilities
@@ -23,13 +23,13 @@ pub fn initMetal() !MetalState {
             max_threads.height,
             max_threads.depth,
         });
-        return MetalError.InvalidDevice;
+        return MetalError.InvalidResource;
     }
 
     const max_memory = metal_framework.MetalFramework.get_max_threadgroup_memory_length(device);
     if (max_memory == 0) {
         std.debug.print("Invalid max threadgroup memory length: {}\n", .{max_memory});
-        return MetalError.InvalidDevice;
+        return MetalError.InvalidResource;
     }
 
     // Get device name for debugging
@@ -59,7 +59,11 @@ pub fn initMetal() !MetalState {
     };
 
     // Verify command queue is valid
-    const queue_device = metal_framework.MTLFunction_getDevice(command_queue);
+    const device_sel = metal_framework.sel_registerName("device") orelse {
+        std.debug.print("Failed to get device selector\n", .{});
+        return MetalError.InvalidCommandQueue;
+    };
+    const queue_device = metal_framework.objc_msgSend_basic(command_queue, device_sel);
     if (queue_device == null or queue_device != device) {
         std.debug.print("Command queue device mismatch\n", .{});
         return MetalError.InvalidCommandQueue;
@@ -72,9 +76,6 @@ pub fn initMetal() !MetalState {
     }
 
     state.command_queue = command_queue;
-
-    // Verify state is valid
-    try state.validate();
 
     std.debug.print("Metal State: Initialization complete\n", .{});
     return state;

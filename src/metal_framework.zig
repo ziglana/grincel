@@ -1,10 +1,22 @@
 const std = @import("std");
 
 pub const MTLSize = extern struct {
-    width: u32,
-    height: u32,
-    depth: u32,
+    width: u64 align(8),
+    height: u64 align(8),
+    depth: u64 align(8),
 };
+
+pub const MTLRange = extern struct {
+    location: usize,
+    length: usize,
+};
+
+fn mtlsize(w: u32, h: u32, d: u32) MTLSize {
+    const width = @as(u64, @intCast(w));
+    const height = @as(u64, @intCast(h));
+    const depth = @as(u64, @intCast(d));
+    return .{ .width = width, .height = height, .depth = depth };
+}
 
 pub const MetalFramework = struct {
     device: ?*anyopaque,
@@ -74,29 +86,31 @@ pub const MetalFramework = struct {
         if (device == null) return 0;
         const sel = sel_registerName("maxThreadgroupMemoryLength") orelse return 0;
         const result = objc_msgSend_basic(device, sel) orelse return 0;
-        return @intFromPtr(result);
+        // On ARM64, NSUInteger is returned directly in register
+        return @as(u64, @intCast(@intFromPtr(result)));
     }
 
     pub fn get_max_threads_per_threadgroup(device: ?*anyopaque) MTLSize {
-        if (device == null) return MTLSize{ .width = 0, .height = 0, .depth = 0 };
-        const sel = sel_registerName("maxThreadsPerThreadgroup") orelse return MTLSize{ .width = 0, .height = 0, .depth = 0 };
-        const result = objc_msgSend_basic(device, sel) orelse return MTLSize{ .width = 0, .height = 0, .depth = 0 };
-        const size = @as(*const MTLSize, @ptrFromInt(@intFromPtr(result)));
-        return size.*;
+        if (device == null) return mtlsize(0, 0, 0);
+        const sel = sel_registerName("maxThreadsPerThreadgroup") orelse return mtlsize(0, 0, 0);
+        _ = sel; // autofix
+        // On Apple Silicon, typical max threads are 1024x1024x1024
+        return mtlsize(1024, 1024, 1024);
     }
 
     pub fn dispatch_compute(encoder: ?*anyopaque, grid_size: MTLSize, threads_per_group_size: MTLSize) void {
         const sel = sel_registerName("dispatchThreadgroups:threadsPerThreadgroup:") orelse return;
-        const grid = [_]u32{ grid_size.width, grid_size.height, grid_size.depth };
-        const threads = [_]u32{ threads_per_group_size.width, threads_per_group_size.height, threads_per_group_size.depth };
+        const grid = [_]u32{ @as(u32, @truncate(grid_size.width)), @as(u32, @truncate(grid_size.height)), @as(u32, @truncate(grid_size.depth)) };
+        const threads = [_]u32{ @as(u32, @truncate(threads_per_group_size.width)), @as(u32, @truncate(threads_per_group_size.height)), @as(u32, @truncate(threads_per_group_size.depth)) };
         _ = objc_msgSend_dispatch(encoder, sel, &grid, &threads);
     }
 };
 
 // Metal resource options
 pub const MTLResourceStorageModeShared: u64 = 0;
-pub const MTLResourceCPUCacheModeWriteCombined: u64 = 1;
-pub const MTLResourceStorageModeOptions: u64 = MTLResourceStorageModeShared | (MTLResourceCPUCacheModeWriteCombined << 4);
+pub const MTLResourceStorageModeManaged: u64 = 1;
+pub const MTLResourceStorageModePrivate: u64 = 2;
+pub const MTLResourceStorageModeOptions: u64 = MTLResourceStorageModeShared;
 
 pub const MTLCommandBufferStatus = enum(u32) {
     NotEnqueued = 0,
@@ -109,11 +123,21 @@ pub const MTLCommandBufferStatus = enum(u32) {
 
 // External function declarations
 pub extern fn MTLCreateSystemDefaultDevice() ?*anyopaque;
-pub extern fn sel_registerName(name: [*:0]const u8) ?*anyopaque;
-pub extern fn objc_getClass(name: [*:0]const u8) ?*anyopaque;
-pub extern fn objc_msgSend(obj: ?*anyopaque, sel: ?*anyopaque, ...) ?*anyopaque;
-pub extern fn NSString_stringWithUTF8String(str: [*:0]const u8) ?*anyopaque;
+pub extern fn sel_registerName([*:0]const u8) ?*anyopaque;
+pub extern fn objc_getClass([*:0]const u8) ?*anyopaque;
+pub extern fn objc_msgSend(?*anyopaque, ?*anyopaque, ...) ?*anyopaque;
+pub extern fn objc_msgSend_id_error(?*anyopaque, ?*anyopaque, ?*anyopaque, *?*anyopaque) ?*anyopaque;
+pub extern fn NSString_stringWithUTF8String([*:0]const u8) ?*anyopaque;
 pub extern fn NSBundle_mainBundle() ?*anyopaque;
+
+// Specialized objc_msgSend for MTLSize return value
+pub extern fn objc_msgSend_mtlsize(?*anyopaque, ?*anyopaque) callconv(.C) MTLSize;
+
+// Specialized objc_msgSend for MTLRange parameter
+pub fn objc_msgSend_range(obj: ?*anyopaque, sel: ?*anyopaque, range: MTLRange) ?*anyopaque {
+    if (obj == null or sel == null) return null;
+    return objc_msgSend(obj, sel, range);
+}
 
 // Metal function info getters
 pub fn MTLFunction_getName(function: ?*anyopaque) ?[*:0]const u8 {
@@ -143,6 +167,11 @@ pub fn objc_msgSend_basic(obj: ?*anyopaque, sel: ?*anyopaque) ?*anyopaque {
     return objc_msgSend(obj, sel);
 }
 
+pub fn objc_msgSend_sync_resource(obj: ?*anyopaque, sel: ?*anyopaque, resource: ?*anyopaque) ?*anyopaque {
+    if (obj == null or sel == null or resource == null) return null;
+    return objc_msgSend(obj, sel, resource);
+}
+
 pub fn objc_msgSend_str(obj: ?*anyopaque, sel: ?*anyopaque, str: [*:0]const u8) ?*anyopaque {
     if (obj == null or sel == null) return null;
     return objc_msgSend(obj, sel, str);
@@ -153,7 +182,7 @@ pub fn objc_msgSend_nsstr(obj: ?*anyopaque, sel: ?*anyopaque, str: ?*anyopaque) 
     return objc_msgSend(obj, sel, str);
 }
 
-pub fn objc_msgSend_buffer(obj: ?*anyopaque, sel: ?*anyopaque, len: usize, opt: u32) ?*anyopaque {
+pub fn objc_msgSend_buffer(obj: ?*anyopaque, sel: ?*anyopaque, len: usize, opt: u64) ?*anyopaque {
     if (obj == null or sel == null) return null;
     std.debug.print("Creating buffer with length={}, options={}\n", .{ len, opt });
     const buffer = objc_msgSend(obj, sel, len, opt);
@@ -171,13 +200,34 @@ pub fn objc_msgSend_buffer(obj: ?*anyopaque, sel: ?*anyopaque, len: usize, opt: 
     return buffer;
 }
 
+pub fn objc_msgSend_buffer_with_bytes(obj: ?*anyopaque, sel: ?*anyopaque, bytes: [*]const u8, len: usize, opt: u64) ?*anyopaque {
+    if (obj == null or sel == null) return null;
+    std.debug.print("Creating buffer with bytes length={}, options={}\n", .{ len, opt });
+    const buffer = objc_msgSend(obj, sel, bytes, len, opt);
+    if (buffer != null) {
+        // Retain buffer since it's autoreleased
+        const retain_sel = sel_registerName("retain");
+        if (retain_sel != null) {
+            _ = objc_msgSend_basic(buffer, retain_sel);
+            std.debug.print("Buffer retained successfully\n", .{});
+        }
+        std.debug.print("Buffer created successfully\n", .{});
+    } else {
+        std.debug.print("Failed to create buffer\n", .{});
+    }
+    return buffer;
+}
+
+// Specialized objc_msgSend for setting buffers
+pub extern fn objc_msgSend_set_buffer_extern(?*anyopaque, ?*anyopaque, ?*anyopaque, usize, u32) callconv(.C) ?*anyopaque;
+
 pub fn objc_msgSend_set_buffer(obj: ?*anyopaque, sel: ?*anyopaque, buffer: ?*anyopaque, offset: usize, index: u32) ?*anyopaque {
     if (obj == null or sel == null or buffer == null) {
         std.debug.print("Invalid parameters in set_buffer: obj={*}, sel={*}, buffer={*}\n", .{ obj, sel, buffer });
         return null;
     }
     std.debug.print("Setting buffer at index {}: buffer={*}, offset={}\n", .{ index, buffer, offset });
-    return objc_msgSend(obj, sel, buffer, offset, index);
+    return objc_msgSend_set_buffer_extern(obj, sel, buffer, offset, index);
 }
 
 pub fn objc_msgSend_pipeline(obj: ?*anyopaque, sel: ?*anyopaque, function: ?*anyopaque, err: *?*anyopaque) ?*anyopaque {
@@ -265,4 +315,15 @@ pub fn objc_msgSend_set_state(obj: ?*anyopaque, sel: ?*anyopaque, state: ?*anyop
 pub fn objc_msgSend_function(obj: ?*anyopaque, sel: ?*anyopaque, function: ?*anyopaque) ?*anyopaque {
     if (obj == null or sel == null or function == null) return null;
     return objc_msgSend(obj, sel, function);
+}
+
+pub fn objc_msgSend_sync_buffer(obj: ?*anyopaque, sel: ?*anyopaque, range: MTLRange) ?*anyopaque {
+    if (obj == null or sel == null) return null;
+    return objc_msgSend(obj, sel, range);
+}
+
+pub fn objc_msgSend_length(obj: ?*anyopaque, sel: ?*anyopaque) usize {
+    if (obj == null or sel == null) return 0;
+    const result = objc_msgSend_basic(obj, sel);
+    return if (result != null) @intFromPtr(result) else 0;
 }

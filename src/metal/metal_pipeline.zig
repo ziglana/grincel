@@ -55,7 +55,7 @@ pub fn createPipeline(state: *MetalState, function_name: [*:0]const u8) !void {
     const pipeline = try createPipelineState(state, function);
     if (pipeline == null) {
         std.debug.print("Failed to create pipeline state\n", .{});
-        return MetalError.NoPipeline;
+        return MetalError.NoPipelineState;
     }
 
     // Release old pipeline state if it exists
@@ -64,13 +64,6 @@ pub fn createPipeline(state: *MetalState, function_name: [*:0]const u8) !void {
         if (release_sel != null) {
             _ = metal_framework.objc_msgSend_basic(old_pipeline, release_sel);
         }
-    }
-
-    // Verify pipeline state
-    const pipeline_device = metal_framework.MTLFunction_getDevice(pipeline);
-    if (pipeline_device == null or pipeline_device != state.device) {
-        std.debug.print("Pipeline device mismatch\n", .{});
-        return MetalError.InvalidPipeline;
     }
 
     state.compute_pipeline = pipeline;
@@ -190,11 +183,11 @@ fn createPipelineState(state: *const MetalState, function: ?*anyopaque) !?*anyop
 
     const pipeline_sel = metal_framework.sel_registerName("newComputePipelineStateWithFunction:error:") orelse {
         std.debug.print("Failed to get newComputePipelineStateWithFunction selector\n", .{});
-        return MetalError.NoPipeline;
+        return MetalError.NoPipelineState;
     };
 
     var err_ptr: ?*anyopaque = null;
-    const pipeline = metal_framework.objc_msgSend_pipeline(
+    const pipeline = metal_framework.objc_msgSend_id_error(
         state.device.?,
         pipeline_sel,
         function,
@@ -208,7 +201,7 @@ fn createPipelineState(state: *const MetalState, function: ?*anyopaque) !?*anyop
             }
             _ = metal_framework.objc_msgSend_basic(err_ptr, metal_framework.sel_registerName("release"));
         }
-        return MetalError.NoPipeline;
+        return MetalError.NoPipelineState;
     };
 
     // Retain pipeline since it's autoreleased

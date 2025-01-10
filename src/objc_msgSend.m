@@ -64,7 +64,12 @@ void* objc_msgSend_buffer(void* obj, SEL sel, uint64_t length, uint64_t options)
         
         if (buffer) {
             NSLog(@"Created buffer: %@, length=%llu, options=%llu", buffer, length, options);
-            NSLog(@"Buffer contents: %p", [buffer contents]);
+            void* contents = [buffer contents];
+            NSLog(@"Buffer contents: %p", contents);
+            
+            // Retain buffer since it's autoreleased
+            [buffer retain];
+            
             return (void*)CFBridgingRetain(buffer);
         } else {
             NSLog(@"Failed to create buffer");
@@ -113,11 +118,11 @@ void* objc_msgSend_pipeline(void* obj, SEL sel, void* function, void** error) {
             NSLog(@"Function name: %@", [mtlFunction name]);
             NSLog(@"Function device: %@", [mtlFunction device]);
             
-            NSError* __autoreleasing err = nil;
+            NSError* err = nil;
             id<MTLComputePipelineState> pipeline = nil;
             
             @try {
-                pipeline = [device newComputePipelineStateWithFunction:mtlFunction error:&err];
+                pipeline = (__bridge id<MTLComputePipelineState>)objc_msgSend_id_error(device, sel, mtlFunction, &err);
                 if (pipeline) {
                     NSLog(@"Successfully created pipeline state: %@", pipeline);
                     // Return a retained pipeline state
@@ -126,7 +131,9 @@ void* objc_msgSend_pipeline(void* obj, SEL sel, void* function, void** error) {
                     NSLog(@"Failed to create pipeline state");
                     if (err) {
                         NSLog(@"Error: %@", err);
-                        *error = (void*)CFBridgingRetain(err);
+                        if (error) {
+                            *error = (void*)CFBridgingRetain(err);
+                        }
                     }
                     return nil;
                 }
@@ -196,6 +203,29 @@ void* MTLFunction_getDevice(void* function) {
     if (function == nil) return nil;
     id<MTLFunction> mtlFunction = (__bridge id<MTLFunction>)function;
     return (__bridge void*)[mtlFunction device];
+}
+
+// Define our own MTLSize to match Zig's layout
+typedef struct {
+    uint32_t width __attribute__((aligned(8)));
+    uint32_t height __attribute__((aligned(8)));
+    uint32_t depth __attribute__((aligned(8)));
+} AlignedMTLSize;
+
+// Specialized function to handle MTLSize return values
+AlignedMTLSize objc_msgSend_mtlsize(void* obj, SEL sel) {
+    if (obj == nil || sel == nil) return (AlignedMTLSize){0, 0, 0};
+    
+    @autoreleasepool {
+        id target = (__bridge id)obj;
+        MTLSize (*msgSend)(id, SEL) = (MTLSize (*)(id, SEL))objc_msgSend;
+        MTLSize result = msgSend(target, sel);
+        return (AlignedMTLSize){
+            .width = (uint32_t)result.width,
+            .height = (uint32_t)result.height,
+            .depth = (uint32_t)result.depth
+        };
+    }
 }
 
 // Function to get description from NSError

@@ -52,10 +52,10 @@ pub fn main() !void {
         .fixed_chars = [_]u32{0} ** 8,
         .mask = [_]u32{0} ** 8,
         .case_sensitive = 1,
-        ._padding1 = [_]u8{0} ** 12,
-        ._padding2 = [_]u8{0} ** 16,
-        ._padding3 = [_]u8{0} ** 16,
-        ._padding4 = [_]u8{0} ** 12,
+        ._padding1 = [_]u32{0} ** 3,
+        ._padding2 = [_]u32{0} ** 4,
+        ._padding3 = [_]u32{0} ** 4,
+        ._padding4 = [_]u32{0} ** 3,
     };
 
     // Create test key pair buffer

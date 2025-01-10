@@ -1,4 +1,48 @@
 const std = @import("std");
+
+pub const Metal = struct {
+    device: *anyopaque,
+    command_queue: *anyopaque,
+    pipeline_state: *anyopaque,
+    state: *MetalState,
+
+    pub fn deinit(self: *Metal, allocator: std.mem.Allocator) void {
+        if (self.state) |state| {
+            state.deinit();
+            allocator.destroy(state) catch |err| {
+                std.debug.print("Failed to destroy MetalState: {}\n", .{err});
+            };
+            self.state = null;
+        }
+        self.device = null;
+        self.command_queue = null;
+        self.pipeline_state = null;
+    }
+
+    pub fn init(allocator: std.mem.Allocator) !Metal {
+        const state = try allocator.create(MetalState);
+        state.* = MetalState{
+            .device = undefined,
+            .command_queue = undefined,
+            .compute_pipeline = undefined,
+            .pattern_buffer = null,
+            .output_buffer = null,
+            .library = undefined,
+        };
+
+        return Metal{
+            .device = undefined,
+            .command_queue = undefined,
+            .pipeline_state = undefined,
+            .state = state,
+        };
+    }
+
+    pub fn createComputePipeline(self: *Metal) !void {
+        _ = self; // TODO: Implement pipeline creation
+        return error.Unimplemented;
+    }
+};
 const metal_framework = @import("../metal_framework.zig");
 const types = @import("metal_types.zig");
 const MetalError = types.MetalError;
@@ -21,55 +65,64 @@ pub fn setupCompute(state: *MetalState, pattern_buffer: []const u8, output_buffe
     }
 
     // Create pattern buffer with data
-    const buffer_sel = metal_framework.sel_registerName("newBufferWithBytes:length:options:") orelse {
-        std.debug.print("Failed to get newBufferWithBytes selector\n", .{});
-        return MetalError.NoBuffer;
-    };
-
-    // Ensure pattern buffer is properly aligned
-    const aligned_pattern = try std.heap.page_allocator.alignedAlloc(u8, 16, pattern_buffer.len);
-    defer std.heap.page_allocator.free(aligned_pattern);
-    @memcpy(aligned_pattern, pattern_buffer);
-
-    std.debug.print("Creating pattern buffer with size: {}, alignment: {}\n", .{ pattern_buffer.len, @alignOf(@TypeOf(aligned_pattern)) });
-    const pattern_mtl_buffer = metal_framework.objc_msgSend(
+    std.debug.print("Creating pattern buffer with size: {} bytes\n", .{pattern_buffer.len});
+    if (pattern_buffer.len % 16 != 0) {
+        std.debug.print("Pattern buffer size {} is not 16-byte aligned\n", .{pattern_buffer.len});
+        return MetalError.InvalidBufferSize;
+    }
+    const pattern_mtl_buffer = metal_framework.objc_msgSend_buffer(
         state.device.?,
-        buffer_sel,
-        aligned_pattern.ptr,
+        metal_framework.sel_registerName("newBufferWithLength:options:") orelse return MetalError.NoBuffer,
         pattern_buffer.len,
-        metal_framework.MTLResourceStorageModeOptions,
+        metal_framework.MTLResourceStorageModeShared,
     ) orelse {
         std.debug.print("Failed to create pattern buffer\n", .{});
         return MetalError.NoBuffer;
     };
 
-    // Retain pattern buffer since it's autoreleased
-    const retain_sel = metal_framework.sel_registerName("retain");
-    if (retain_sel != null) {
-        _ = metal_framework.objc_msgSend_basic(pattern_mtl_buffer, retain_sel);
+    // Copy pattern data to buffer
+    const contents_sel = metal_framework.sel_registerName("contents") orelse {
+        std.debug.print("Failed to get contents selector\n", .{});
+        return MetalError.NoBuffer;
+    };
+
+    const pattern_ptr = metal_framework.objc_msgSend_basic(pattern_mtl_buffer, contents_sel) orelse {
+        std.debug.print("Failed to get pattern buffer contents\n", .{});
+        return MetalError.NoBuffer;
+    };
+
+    const pattern_slice = @as([*]u8, @ptrCast(@alignCast(pattern_ptr)))[0..pattern_buffer.len];
+    @memcpy(pattern_slice, pattern_buffer);
+
+    // Create output buffer and initialize with zeros
+    std.debug.print("Creating output buffer with size: {} bytes\n", .{output_buffer.len});
+    if (output_buffer.len % 16 != 0) {
+        std.debug.print("Output buffer size {} is not 16-byte aligned\n", .{output_buffer.len});
+        return MetalError.InvalidBufferSize;
     }
-
-    // Create output buffer with zeroed data
-    const aligned_output = try std.heap.page_allocator.alignedAlloc(u8, 16, output_buffer.len);
-    defer std.heap.page_allocator.free(aligned_output);
-    @memset(aligned_output, 0);
-
-    std.debug.print("Creating output buffer with size: {}, alignment: {}\n", .{ output_buffer.len, @alignOf(@TypeOf(aligned_output)) });
-    const output_mtl_buffer = metal_framework.objc_msgSend(
+    const output_mtl_buffer = metal_framework.objc_msgSend_buffer(
         state.device.?,
-        buffer_sel,
-        aligned_output.ptr,
+        metal_framework.sel_registerName("newBufferWithLength:options:") orelse return MetalError.NoBuffer,
         output_buffer.len,
-        metal_framework.MTLResourceStorageModeOptions,
+        metal_framework.MTLResourceStorageModeShared,
     ) orelse {
         std.debug.print("Failed to create output buffer\n", .{});
         return MetalError.NoBuffer;
     };
 
-    // Retain output buffer since it's autoreleased
-    if (retain_sel != null) {
-        _ = metal_framework.objc_msgSend_basic(output_mtl_buffer, retain_sel);
-    }
+    // Initialize output buffer with zeros
+    const output_contents_sel = metal_framework.sel_registerName("contents") orelse {
+        std.debug.print("Failed to get contents selector\n", .{});
+        return MetalError.NoBuffer;
+    };
+
+    const output_ptr = metal_framework.objc_msgSend_basic(output_mtl_buffer, output_contents_sel) orelse {
+        std.debug.print("Failed to get output buffer contents\n", .{});
+        return MetalError.NoBuffer;
+    };
+
+    const output_slice = @as([*]u8, @ptrCast(@alignCast(output_ptr)))[0..output_buffer.len];
+    @memset(output_slice, 0);
 
     // Store buffers in state
     state.pattern_buffer = pattern_mtl_buffer;
@@ -126,11 +179,13 @@ pub fn runCompute(state: *MetalState, grid_size: metal_framework.MTLSize, group_
     // Retain encoder since it's autoreleased
     if (retain_sel != null) {
         _ = metal_framework.objc_msgSend_basic(encoder, retain_sel);
+        std.debug.print("Retained compute encoder\n", .{});
     }
     defer {
         const release_sel = metal_framework.sel_registerName("release");
         if (release_sel != null) {
             _ = metal_framework.objc_msgSend_basic(encoder, release_sel);
+            std.debug.print("Released compute encoder\n", .{});
         }
     }
 
@@ -140,7 +195,11 @@ pub fn runCompute(state: *MetalState, grid_size: metal_framework.MTLSize, group_
         return MetalError.InvalidPipeline;
     };
 
-    _ = metal_framework.objc_msgSend_set_state(encoder, set_pipeline_sel, state.compute_pipeline.?);
+    if (metal_framework.objc_msgSend_set_state(encoder, set_pipeline_sel, state.compute_pipeline.?) == null) {
+        std.debug.print("Failed to set compute pipeline state\n", .{});
+        return MetalError.InvalidPipeline;
+    }
+    std.debug.print("Set compute pipeline state successfully\n", .{});
 
     // Set buffers
     const set_buffer_sel = metal_framework.sel_registerName("setBuffer:offset:atIndex:") orelse {
@@ -148,18 +207,56 @@ pub fn runCompute(state: *MetalState, grid_size: metal_framework.MTLSize, group_
         return MetalError.InvalidBuffer;
     };
 
-    _ = metal_framework.objc_msgSend_set_buffer(encoder, set_buffer_sel, state.pattern_buffer.?, 0, 0);
-    _ = metal_framework.objc_msgSend_set_buffer(encoder, set_buffer_sel, state.output_buffer.?, 0, 1);
+    // Validate buffers before setting
+    if (state.pattern_buffer == null) {
+        std.debug.print("Pattern buffer is null\n", .{});
+        return MetalError.InvalidBuffer;
+    }
+    if (state.output_buffer == null) {
+        std.debug.print("Output buffer is null\n", .{});
+        return MetalError.InvalidBuffer;
+    }
+
+    // Set pattern buffer
+    if (metal_framework.objc_msgSend_set_buffer(encoder, set_buffer_sel, state.pattern_buffer.?, 0, 0) == null) {
+        std.debug.print("Failed to set pattern buffer\n", .{});
+        return MetalError.InvalidBuffer;
+    }
+    std.debug.print("Set pattern buffer successfully\n", .{});
+
+    // Set output buffer
+    if (metal_framework.objc_msgSend_set_buffer(encoder, set_buffer_sel, state.output_buffer.?, 0, 1) == null) {
+        std.debug.print("Failed to set output buffer\n", .{});
+        return MetalError.InvalidBuffer;
+    }
+    std.debug.print("Set output buffer successfully\n", .{});
 
     // Dispatch compute
     metal_framework.MetalFramework.dispatch_compute(encoder, grid_size, group_size);
 
-    // End encoding
+    // Synchronize managed buffers
+    const sync_sel = metal_framework.sel_registerName("didModifyRange:") orelse {
+        std.debug.print("Failed to get didModifyRange selector\n", .{});
+        return MetalError.InvalidBuffer;
+    };
+
+    const length_sel = metal_framework.sel_registerName("length") orelse {
+        std.debug.print("Failed to get length selector\n", .{});
+        return MetalError.InvalidBuffer;
+    };
+
+    const buffer_length = metal_framework.objc_msgSend_length(state.output_buffer.?, length_sel);
+    const range = metal_framework.MTLRange{
+        .location = 0,
+        .length = buffer_length,
+    };
+    _ = metal_framework.objc_msgSend_sync_buffer(state.output_buffer.?, sync_sel, range);
+
+    // End compute encoding
     const end_encoding_sel = metal_framework.sel_registerName("endEncoding") orelse {
         std.debug.print("Failed to get endEncoding selector\n", .{});
         return MetalError.InvalidCommandEncoder;
     };
-
     _ = metal_framework.objc_msgSend_basic(encoder, end_encoding_sel);
 
     // Commit command buffer
@@ -188,6 +285,7 @@ pub fn getResults(state: *MetalState, output_buffer: []u8) !void {
     try state.validate();
     try state.validateBuffers();
 
+    // Get contents pointer and copy data
     const contents_sel = metal_framework.sel_registerName("contents") orelse {
         std.debug.print("Failed to get contents selector\n", .{});
         return MetalError.NoBuffer;
@@ -198,16 +296,9 @@ pub fn getResults(state: *MetalState, output_buffer: []u8) !void {
         return MetalError.NoBuffer;
     };
 
-    // Create aligned slice for copying
-    const aligned_output = try std.heap.page_allocator.alignedAlloc(u8, 16, output_buffer.len);
-    defer std.heap.page_allocator.free(aligned_output);
-
-    // Copy from Metal buffer to aligned slice
-    const metal_slice = @as([*]u8, @ptrCast(@alignCast(output_ptr)))[0..output_buffer.len];
-    @memcpy(aligned_output, metal_slice);
-
-    // Copy from aligned slice to output buffer
-    @memcpy(output_buffer, aligned_output);
+    // Copy directly from Metal buffer to output buffer
+    const output_slice = @as([*]u8, @ptrCast(@alignCast(output_ptr)))[0..output_buffer.len];
+    @memcpy(output_buffer, output_slice);
 
     std.debug.print("Metal State: Results retrieved successfully\n", .{});
 }

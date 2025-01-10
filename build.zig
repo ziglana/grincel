@@ -14,25 +14,32 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // Compile Objective-C source for test executable
+    // Compile Objective-C sources for test executable
     const test_exe_objc = b.addObject(.{
         .name = "objc_msgSend",
         .target = target,
         .optimize = optimize,
     });
-    test_exe_objc.addCSourceFile(.{
-        .file = .{ .cwd_relative = "src/objc_msgSend.m" },
-        .flags = &[_][]const u8{
-            "-x",
-            "objective-c",
-            "-fno-objc-arc", // Disable ARC
-            "-I" ++ sdk_path ++ "/usr/include",
-            "-I" ++ sdk_path ++ "/usr/include/objc",
-            "-I" ++ sdk_path ++ "/System/Library/Frameworks/Metal.framework/Headers",
-            "-I" ++ sdk_path ++ "/System/Library/Frameworks/Foundation.framework/Headers",
-            "-F" ++ sdk_path ++ "/System/Library/Frameworks",
-        },
-    });
+    const objc_files = [_][]const u8{
+        "src/objc_msgSend.m",
+        "src/objc_msgSend_set_buffer.m",
+    };
+    const objc_flags = [_][]const u8{
+        "-x",
+        "objective-c",
+        "-fno-objc-arc", // Disable ARC
+        "-I" ++ sdk_path ++ "/usr/include",
+        "-I" ++ sdk_path ++ "/usr/include/objc",
+        "-I" ++ sdk_path ++ "/System/Library/Frameworks/Metal.framework/Headers",
+        "-I" ++ sdk_path ++ "/System/Library/Frameworks/Foundation.framework/Headers",
+        "-F" ++ sdk_path ++ "/System/Library/Frameworks",
+    };
+    for (objc_files) |file| {
+        test_exe_objc.addCSourceFile(.{
+            .file = .{ .cwd_relative = file },
+            .flags = &objc_flags,
+        });
+    }
 
     // Link with Metal framework for test executable
     if (target.result.os.tag == .macos) {
@@ -63,6 +70,11 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+
+    const metal_module = b.addModule("metal", .{
+        .root_source_file = .{ .cwd_relative = "src/metal/metal_compute.zig" },
+    });
+    exe.root_module.addImport("metal", metal_module);
 
     // Create output directory
     const mkdir_cmd = b.addSystemCommand(&[_][]const u8{
@@ -142,25 +154,18 @@ pub fn build(b: *std.Build) void {
     // Add dummy object file to executable
     exe.addObjectFile(.{ .cwd_relative = "zig-out/bin/dummy.o" });
 
-    // Compile Objective-C source separately
+    // Compile Objective-C sources separately
     const objc = b.addObject(.{
         .name = "objc_msgSend",
         .target = target,
         .optimize = optimize,
     });
-    objc.addCSourceFile(.{
-        .file = .{ .cwd_relative = "src/objc_msgSend.m" },
-        .flags = &[_][]const u8{
-            "-x",
-            "objective-c",
-            "-fno-objc-arc", // Disable ARC
-            "-I" ++ sdk_path ++ "/usr/include",
-            "-I" ++ sdk_path ++ "/usr/include/objc",
-            "-I" ++ sdk_path ++ "/System/Library/Frameworks/Metal.framework/Headers",
-            "-I" ++ sdk_path ++ "/System/Library/Frameworks/Foundation.framework/Headers",
-            "-F" ++ sdk_path ++ "/System/Library/Frameworks",
-        },
-    });
+    for (objc_files) |file| {
+        objc.addCSourceFile(.{
+            .file = .{ .cwd_relative = file },
+            .flags = &objc_flags,
+        });
+    }
 
     // Link Objective-C object file with executable
     exe.addObject(objc);
@@ -207,10 +212,11 @@ pub fn build(b: *std.Build) void {
     pattern_tests.root_module.addImport("pattern", pattern_module);
 
     const unit_tests = b.addTest(.{
-        .root_source_file = .{ .cwd_relative = "src/main.zig" },
+        .root_source_file = .{ .cwd_relative = "src/test/metal_test.zig" },
         .target = target,
         .optimize = optimize,
     });
+    unit_tests.root_module.addImport("metal", metal_module);
 
     // Compile Objective-C source separately
     const test_objc = b.addObject(.{
